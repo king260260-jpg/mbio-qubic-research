@@ -1,0 +1,51 @@
+MBIO Ablation Test Results
+===========================
+
+Purpose
+-------
+These tests separate two mechanisms that were previously evaluated together:
+
+1. Adaptive Parent Selection.
+2. Cumulative Trail Memory.
+
+The purpose is to test each mechanism independently before combining them.
+
+Test A: Adaptive Parent Selection Without Trail Memory
+-------------------------------------------------------
+Configuration:
+- Quality weight: 1.0
+- Trail-memory weight: 0.0
+- Trail memory disabled
+
+Result: PASSED
+
+Test B: Trail Memory Without Quality Weighting
+----------------------------------------------
+Configuration:
+- Quality weight: 0.0
+- Trail-memory weight: 1.0
+- Trail memory enabled
+
+Result: PASSED
+
+Local Test Summary
+------------------
+Passed both 2 test cases with 2 assertions.
+
+Interpretation
+--------------
+These results confirm that the two mechanisms can be implemented and tested independently.
+
+They do not prove that either mechanism improves actual Qubic mining performance. A controlled benchmark against the original Qiner baseline is still required.
+
+Next Step
+---------
+The next experiment should compare:
+
+Qiner baseline
+versus
+Qiner with adaptive parent selection only
+versus
+Qiner with trail memory only
+
+All configurations must use the same task, hardware, thread count, runtime, and authorized test environment.
