@@ -1,0 +1,152 @@
+[1mdiff --git a/CMakeLists.txt b/CMakeLists.txt[m
+[1mindex baca214..b86443e 100644[m
+[1m--- a/CMakeLists.txt[m
+[1m+++ b/CMakeLists.txt[m
+[36m@@ -25,6 +25,7 @@[m [mset(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)[m
+ [m
+ # Options[m
+ OPTION(BUILD_TOOLS "Build Qiner tools" OFF)[m
+[32m+[m[32mOPTION(ENABLE_MBIO_PARENT_SELECTION "Enable MBIO adaptive parent selection in AntMiner" OFF)[m
+ [m
+ # Main executable[m
+ add_executable(${PROJECT_NAME} src/Qiner.cpp src/keyUtils.cpp)[m
+[36m@@ -42,6 +43,10 @@[m [mendif()[m
+ # Ant colony reference miner[m
+ add_executable(AntMiner src/ant/AntMiner.cpp src/keyUtils.cpp)[m
+ [m
+[32m+[m[32mif(ENABLE_MBIO_PARENT_SELECTION)[m
+[32m+[m[32m    target_compile_definitions(AntMiner PRIVATE MBIO_ADAPTIVE_PARENT_SELECTION=1)[m
+[32m+[m[32mendif()[m
+[32m+[m
+ target_include_directories(AntMiner[m
+     PRIVATE[m
+         ${CMAKE_SOURCE_DIR}/src[m
+[1mdiff --git a/src/ant/AntMiner.cpp b/src/ant/AntMiner.cpp[m
+[1mindex 93c1457..30f4176 100644[m
+[1m--- a/src/ant/AntMiner.cpp[m
+[1m+++ b/src/ant/AntMiner.cpp[m
+[36m@@ -19,6 +19,9 @@[m
+ #include "keyUtils.h"[m
+ #include "network.h"[m
+ #include "ant_colony_message.h"[m
+[32m+[m[32m#ifdef MBIO_ADAPTIVE_PARENT_SELECTION[m
+[32m+[m[32m#include "mbio_parent_selection.h"[m
+[32m+[m[32m#endif[m
+ [m
+ // Actual miner software will modify the strategy accordingly[m
+ // Demo is greedy exploration rate: 1 in this many mining rounds extends a random resolved[m
+[36m@@ -797,6 +800,9 @@[m [mint main(int argc, char* argv[])[m
+     }[m
+ [m
+     std::vector<OwnNode> ownNodes;[m
+[32m+[m[32m#ifdef MBIO_ADAPTIVE_PARENT_SELECTION[m
+[32m+[m[32m    mbio::AdaptiveParentSelector mbioParentSelector;[m
+[32m+[m[32m#endif[m
+     // Latest identity-tree listing (refreshed each resolve cycle) used to resolve our[m
+     // submitted nodes' selfRefs.[m
+     std::vector<AntIdentityTreeNode> listing;[m
+[36m@@ -891,9 +897,38 @@[m [mint main(int argc, char* argv[])[m
+ [m
+     while (!state)[m
+     {[m
+[31m-        // Parent selection: the best own node whose selfRef is known (deepest frontier),[m
+[31m-        // or ROOT when none is resolved yet.[m
+[31m-        // Pool miner can tune here to select the parent that maximize their miner score[m
+[32m+[m[32m        unsigned long long exploreRoll = 0;[m
+[32m+[m[32m        _rdrand64_step(&exploreRoll);[m
+[32m+[m[32m        const bool explore = ((exploreRoll % ANT_EXPLORE_ONE_IN) == 0);[m
+[32m+[m
+[32m+[m[32m#ifdef MBIO_ADAPTIVE_PARENT_SELECTION[m
+[32m+[m[32m        // MBIO experiment: retain the existing 1-in-8 exploration rate, but[m
+[32m+[m[32m        // choose the exploitation parent with adaptive quality/trail weights.[m
+[32m+[m[32m        std::vector<mbio::ParentCandidate> candidates;[m
+[32m+[m[32m        std::vector<std::size_t> candidateNodeIndices;[m
+[32m+[m[32m        candidates.reserve(ownNodes.size());[m
+[32m+[m[32m        candidateNodeIndices.reserve(ownNodes.size());[m
+[32m+[m[32m        for (std::size_t i = 0; i < ownNodes.size(); ++i)[m
+[32m+[m[32m        {[m
+[32m+[m[32m            const OwnNode& node = ownNodes[i];[m
+[32m+[m[32m            if (node.refKnown && !node.lutMismatch)[m
+[32m+[m[32m            {[m
+[32m+[m[32m                const std::uint64_t id = (static_cast<std::uint64_t>(node.selfTick) << 32)[m
+[32m+[m[32m                    | static_cast<std::uint64_t>(node.selfSolutionIndexInTick);[m
+[32m+[m[32m                candidates.push_back({ id, node.score, true, true });[m
+[32m+[m[32m                candidateNodeIndices.push_back(i);[m
+[32m+[m[32m            }[m
+[32m+[m[32m        }[m
+[32m+[m[32m        std::mt19937_64 mbioRng(exploreRoll);[m
+[32m+[m[32m        const std::size_t selected = mbioParentSelector.select(candidates, explore, mbioRng);[m
+[32m+[m[32m        const OwnNode* parentNode = NULL;[m
+[32m+[m[32m        if (selected < candidateNodeIndices.size())[m
+[32m+[m[32m        {[m
+[32m+[m[32m            parentNode = &ownNodes[candidateNodeIndices[selected]];[m
+[32m+[m[32m        }[m
+[32m+[m[32m#else[m
+[32m+[m[32m        // Baseline: choose the best resolved node, with the existing 1-in-8[m
+[32m+[m[32m        // random jump to a resolved node or ROOT for breadth exploration.[m
+         const OwnNode* parentNode = NULL;[m
+         for (const OwnNode& node : ownNodes)[m
+         {[m
+[36m@@ -902,14 +937,9 @@[m [mint main(int argc, char* argv[])[m
+                 parentNode = &node;[m
+             }[m
+         }[m
+[31m-[m
+[31m-        // Exploration (breadth): 1 in ANT_EXPLORE_ONE_IN, jump to a random resolved node or the[m
+[31m-        // root instead of the best, so we do not get stuck descending a single basin.[m
+[31m-        unsigned long long exploreRoll = 0;[m
+[31m-        _rdrand64_step(&exploreRoll);[m
+[31m-        if ((exploreRoll % ANT_EXPLORE_ONE_IN) == 0)[m
+[32m+[m[32m        if (explore)[m
+         {[m
+[31m-            parentNode = NULL;   // root: a fresh basin[m
+[32m+[m[32m            parentNode = NULL;[m
+             if (!ownNodes.empty())[m
+             {[m
+                 const OwnNode& pick = ownNodes[(exploreRoll >> 8) % ownNodes.size()];[m
+[36m@@ -919,6 +949,7 @@[m [mint main(int argc, char* argv[])[m
+                 }[m
+             }[m
+         }[m
+[32m+[m[32m#endif[m
+         const unsigned int parentTick = parentNode ? parentNode->selfTick : ROOT_TICK;[m
+         const unsigned int parentSolutionIndexInTick = parentNode ? parentNode->selfSolutionIndexInTick : ROOT_INDEX_IN_TICK;[m
+         const unsigned int parentScore = parentNode ? parentNode->score : 0xFFFFFFFFU;   // root: WORST[m
+[36m@@ -1056,6 +1087,18 @@[m [mint main(int argc, char* argv[])[m
+                 node.selfSolutionIndexInTick = 0;[m
+                 memcpy(&node.ann, &r.ann, sizeof(AntMinerT::ANN));[m
+                 ownNodes.push_back(node);[m
+[32m+[m[32m#ifdef MBIO_ADAPTIVE_PARENT_SELECTION[m
+[32m+[m[32m                if (r.parentTick != ROOT_TICK || r.parentSolutionIndexInTick != ROOT_INDEX_IN_TICK)[m
+[32m+[m[32m                {[m
+[32m+[m[32m                    const std::uint64_t parentId = (static_cast<std::uint64_t>(r.parentTick) << 32)[m
+[32m+[m[32m                        | static_cast<std::uint64_t>(r.parentSolutionIndexInTick);[m
+[32m+[m[32m                    const double improvement = (r.parentScore > r.score)[m
+[32m+[m[32m                        ? static_cast<double>(r.parentScore - r.score)[m
+[32m+[m[32m                            / static_cast<double>(std::max(1U, r.parentScore))[m
+[32m+[m[32m                        : 0.0;[m
+[32m+[m[32m                    mbioParentSelector.update(parentId, improvement);[m
+[32m+[m[32m                }[m
+[32m+[m[32m#endif[m
+                 printf("Submitted: depth %u, score %u (parent score %u), anchor %u\n",[m
+                     node.depth, r.score, r.parentScore, r.anchorTick);[m
+             }[m
+[1mdiff --git a/test/CMakeLists.txt b/test/CMakeLists.txt[m
+[1mindex a190d18..9dcd3a5 100644[m
+[1m--- a/test/CMakeLists.txt[m
+[1m+++ b/test/CMakeLists.txt[m
+[36m@@ -2,6 +2,7 @@[m [mproject(qiner_test LANGUAGES C CXX)[m
+ [m
+ add_executable(${PROJECT_NAME}[m
+     main.cpp[m
+[32m+[m[32m    mbio_parent_selection_test.cpp[m
+     # score_addition_test.cpp  # obsolete: targets the removed synapse-buffer architecture; needs a LUT rewrite[m
+     )[m
+ [m
+[36m@@ -19,4 +20,4 @@[m [mif(WIN32)[m
+     target_link_libraries(${PROJECT_NAME} wsock32 ws2_32)[m
+ else()[m
+     target_link_libraries(${PROJECT_NAME} pthread)[m
+[31m-endif()[m
+\ No newline at end of file[m
+[32m+[m[32mendif()[m
